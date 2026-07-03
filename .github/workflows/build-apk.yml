@@ -1,0 +1,134 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      # ═══════════════════════════════════════
+      # 1. Checkout
+      # ═══════════════════════════════════════
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ═══════════════════════════════════════
+      # 2. Setup Node.js 20
+      # ═══════════════════════════════════════
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ═══════════════════════════════════════
+      # 3. Setup Java 17
+      # ═══════════════════════════════════════
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ═══════════════════════════════════════
+      # 4. Setup Android SDK
+      # ═══════════════════════════════════════
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      # ═══════════════════════════════════════
+      # 5. NPM install (21 个 Capacitor 插件)
+      # ═══════════════════════════════════════
+      - name: Install npm dependencies
+        run: npm install
+
+      # ═══════════════════════════════════════
+      # 6. Capacitor 添加 Android 平台
+      # ═══════════════════════════════════════
+      - name: Add Android platform
+        run: |
+          npx cap add android || echo "Platform already added"
+          ls -la android/ || echo "Android dir not created"
+
+      # ═══════════════════════════════════════
+      # 7. 覆盖 AndroidManifest.xml 加权限
+      # ═══════════════════════════════════════
+      - name: Configure AndroidManifest permissions
+        run: |
+          if [ -f "scripts/AndroidManifest.xml" ]; then
+            cp scripts/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+            echo "✅ AndroidManifest.xml 已覆盖"
+          fi
+          if [ -f "scripts/strings.xml" ]; then
+            cp scripts/strings.xml android/app/src/main/res/values/strings.xml
+            echo "✅ strings.xml 已覆盖（应用名: 宇聊）"
+          fi
+
+      # ═══════════════════════════════════════
+      # 8. Capacitor sync android
+      # ═══════════════════════════════════════
+      - name: Sync Capacitor plugins to Android
+        run: npx cap sync android
+
+      # ═══════════════════════════════════════
+      # 9. Gradle 编译 Debug APK
+      # ═══════════════════════════════════════
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # ═══════════════════════════════════════
+      # 10. 重命名 APK
+      # ═══════════════════════════════════════
+      - name: Rename APK
+        run: |
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          if [ -f "$APK_PATH" ]; then
+            ls -lh "$APK_PATH"
+            mkdir -p artifacts
+            cp "$APK_PATH" "artifacts/yuliao-v1.0-debug.apk"
+            echo "═══ APK 大小 ═══"
+            ls -lh artifacts/
+          else
+            echo "❌ APK 未找到！查看构建输出："
+            find android/app/build/outputs -name "*.apk" 2>/dev/null
+            exit 1
+          fi
+
+      # ═══════════════════════════════════════
+      # 11. 上传 Artifact
+      # ═══════════════════════════════════════
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuliao-android-apk
+          path: artifacts/yuliao-v1.0-debug.apk
+          retention-days: 30
+
+      # ═══════════════════════════════════════
+      # 12. 摘要
+      # ═══════════════════════════════════════
+      - name: Build summary
+        run: |
+          echo "## 🎉 宇聊 Android APK 构建成功" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 📱 应用：宇聊 (com.qjyes.yuliao)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 类型：Debug APK（未签名，可直接装）" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 大小：$(du -h artifacts/yuliao-v1.0-debug.apk | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔌 插件：21 个（相机/GPS/推送/通知/震动/录音等）" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📥 下载方式" >> $GITHUB_STEP_SUMMARY
+          echo "1. 页面顶部 Artifacts 区域点击 \`yuliao-android-apk\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. 下载 zip 解压得 APK" >> $GITHUB_STEP_SUMMARY
+          echo "3. 传到 Android 手机（微信/QQ/网盘/直接浏览器下）" >> $GITHUB_STEP_SUMMARY
+          echo "4. 允许「未知来源」→ 一键安装" >> $GITHUB_STEP_SUMMARY
