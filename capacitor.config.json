@@ -1,0 +1,48 @@
+{
+  "appId": "com.qjyes.yuliao",
+  "appName": "\u5b87\u804a",
+  "webDir": "www",
+  "server": {
+    "url": "https://chat.qjyes.com/h5",
+    "cleartext": false,
+    "androidScheme": "https",
+    "allowNavigation": ["chat.qjyes.com", "*.qjyes.com"]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#07C160ff",
+    "webContentsDebuggingEnabled": true,
+    "loggingBehavior": "debug",
+    "captureInput": true,
+    "useLegacyBridge": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "launchAutoHide": true,
+      "backgroundColor": "#07C160",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true,
+      "androidSplashResourceName": "splash"
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#07C160",
+      "overlaysWebView": false
+    },
+    "Keyboard": {
+      "resize": "body",
+      "style": "DARK",
+      "resizeOnFullScreen": true
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon_config_sample",
+      "iconColor": "#07C160",
+      "sound": "beep.wav"
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}
