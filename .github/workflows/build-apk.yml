@@ -58,18 +58,37 @@ jobs:
           ls -la android/ || echo "Android dir not created"
 
       # ═══════════════════════════════════════
-      # 7. 覆盖 AndroidManifest.xml 加权限
+      # 7. 覆盖 AndroidManifest.xml 加权限 + 补齐 XML 资源
       # ═══════════════════════════════════════
-      - name: Configure AndroidManifest permissions
+      - name: Configure AndroidManifest & XML resources
         run: |
+          # AndroidManifest.xml — 权限清单
           if [ -f "scripts/AndroidManifest.xml" ]; then
             cp scripts/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
             echo "✅ AndroidManifest.xml 已覆盖"
           fi
+          
+          # strings.xml — 应用名
           if [ -f "scripts/strings.xml" ]; then
             cp scripts/strings.xml android/app/src/main/res/values/strings.xml
-            echo "✅ strings.xml 已覆盖（应用名: 宇聊）"
+            echo "✅ strings.xml 已覆盖（宇聊）"
           fi
+          
+          # 确保 res/xml 目录存在，然后补齐 network_security_config.xml + file_paths.xml
+          mkdir -p android/app/src/main/res/xml
+          
+          if [ -f "scripts/network_security_config.xml" ]; then
+            cp scripts/network_security_config.xml android/app/src/main/res/xml/network_security_config.xml
+            echo "✅ network_security_config.xml 已生成"
+          fi
+          
+          if [ -f "scripts/file_paths.xml" ]; then
+            cp scripts/file_paths.xml android/app/src/main/res/xml/file_paths.xml
+            echo "✅ file_paths.xml 已生成"
+          fi
+          
+          echo "═══ res/xml 目录内容 ═══"
+          ls -la android/app/src/main/res/xml/
 
       # ═══════════════════════════════════════
       # 8. Capacitor sync android
