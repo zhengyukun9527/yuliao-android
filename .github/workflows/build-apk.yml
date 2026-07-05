@@ -93,14 +93,15 @@ jobs:
           [ -f scripts/file_paths.xml ] && cp scripts/file_paths.xml android/app/src/main/res/xml/file_paths.xml
           echo "✅ 资源就绪"
 
-      - name: Inject JPush AppKey into AndroidManifest
+      - name: Inject JPush AppKey into AndroidManifest (可选)
         env:
           JPUSH_APPKEY: ${{ secrets.JPUSH_APPKEY }}
           JPUSH_CHANNEL: ${{ secrets.JPUSH_CHANNEL || 'developer-default' }}
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -z "$JPUSH_APPKEY" ]; then
-            echo "❌ 缺 secrets.JPUSH_APPKEY"; exit 1
+            echo "⏭  未设置 secrets.JPUSH_APPKEY，跳过 JPush 注入（无 JPush 集成也能编译）"
+            exit 0
           fi
           python3 <<PYEOF
           p = "$MANIFEST"
