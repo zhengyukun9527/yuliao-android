@@ -3,150 +3,182 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_notes:
+        description: '发布说明（可选）'
+        required: false
+        default: '常规更新'
+
+env:
+  APP_NAME: yuliao
+  APP_DISPLAY_NAME: 宇聊
 
 jobs:
   build:
     name: Build Debug APK
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      version_string: ${{ steps.version.outputs.version }}
+      build_number: ${{ steps.version.outputs.build }}
+      apk_name: ${{ steps.version.outputs.apk_name }}
 
     steps:
-      # ═══════════════════════════════════════
-      # 1. Checkout
-      # ═══════════════════════════════════════
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ═══════════════════════════════════════
-      # 2. Setup Node.js 20
-      # ═══════════════════════════════════════
+      - name: 计算版本号
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="1.0.0"
+          fi
+          BUILD="${{ github.run_number }}"
+          # versionCode 数字：主*10000 + 次*100 + 修
+          IFS='.' read -r MA MI PA <<< "$VERSION"
+          VCODE=$(( ${MA:-1}*10000 + ${MI:-0}*100 + ${PA:-0} ))
+          APK_NAME="${APP_NAME}-v${VERSION}.apk"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build=$BUILD" >> $GITHUB_OUTPUT
+          echo "vcode=$VCODE" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "📦 版本: $VERSION (build $BUILD, versionCode $VCODE)"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # ═══════════════════════════════════════
-      # 3. Setup Java 17
-      # ═══════════════════════════════════════
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # ═══════════════════════════════════════
-      # 4. Setup Android SDK
-      # ═══════════════════════════════════════
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      # ═══════════════════════════════════════
-      # 5. NPM install (21 个 Capacitor 插件)
-      # ═══════════════════════════════════════
-      - name: Install npm dependencies
-        run: npm install
+      - name: Install npm dependencies (with JPush fallback)
+        run: |
+          set +e
+          npm install
+          if [ $? -ne 0 ]; then
+            for pkg in "@jiguang-ionic/capacitor-jpush" "jpush-capacitor-plugin" "@jpush-plugin/capacitor-jpush"; do
+              npm pkg delete "dependencies.@jpush-plugin/capacitor-jpush" 2>/dev/null || true
+              npm pkg delete "dependencies.@jiguang-ionic/capacitor-jpush" 2>/dev/null || true
+              npm pkg delete "dependencies.jpush-capacitor-plugin" 2>/dev/null || true
+              npm install "$pkg" --save && break
+            done
+          fi
+          set -e
 
-      # ═══════════════════════════════════════
-      # 6. Capacitor 添加 Android 平台
-      # ═══════════════════════════════════════
       - name: Add Android platform
         run: |
           npx cap add android || echo "Platform already added"
-          ls -la android/ || echo "Android dir not created"
 
-      # ═══════════════════════════════════════
-      # 7. 覆盖 AndroidManifest.xml 加权限 + 补齐 XML 资源
-      # ═══════════════════════════════════════
       - name: Configure AndroidManifest & XML resources
         run: |
-          # AndroidManifest.xml — 权限清单
-          if [ -f "scripts/AndroidManifest.xml" ]; then
-            cp scripts/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ AndroidManifest.xml 已覆盖"
-          fi
-          
-          # strings.xml — 应用名
-          if [ -f "scripts/strings.xml" ]; then
-            cp scripts/strings.xml android/app/src/main/res/values/strings.xml
-            echo "✅ strings.xml 已覆盖（宇聊）"
-          fi
-          
-          # 确保 res/xml 目录存在，然后补齐 network_security_config.xml + file_paths.xml
+          [ -f scripts/AndroidManifest.xml ] && cp scripts/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          [ -f scripts/strings.xml ] && cp scripts/strings.xml android/app/src/main/res/values/strings.xml
           mkdir -p android/app/src/main/res/xml
-          
-          if [ -f "scripts/network_security_config.xml" ]; then
-            cp scripts/network_security_config.xml android/app/src/main/res/xml/network_security_config.xml
-            echo "✅ network_security_config.xml 已生成"
-          fi
-          
-          if [ -f "scripts/file_paths.xml" ]; then
-            cp scripts/file_paths.xml android/app/src/main/res/xml/file_paths.xml
-            echo "✅ file_paths.xml 已生成"
-          fi
-          
-          echo "═══ res/xml 目录内容 ═══"
-          ls -la android/app/src/main/res/xml/
+          [ -f scripts/network_security_config.xml ] && cp scripts/network_security_config.xml android/app/src/main/res/xml/network_security_config.xml
+          [ -f scripts/file_paths.xml ] && cp scripts/file_paths.xml android/app/src/main/res/xml/file_paths.xml
+          echo "✅ 资源就绪"
 
-      # ═══════════════════════════════════════
-      # 8. Capacitor sync android
-      # ═══════════════════════════════════════
+      - name: Inject JPush AppKey into AndroidManifest
+        env:
+          JPUSH_APPKEY: ${{ secrets.JPUSH_APPKEY }}
+          JPUSH_CHANNEL: ${{ secrets.JPUSH_CHANNEL || 'developer-default' }}
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -z "$JPUSH_APPKEY" ]; then
+            echo "❌ 缺 secrets.JPUSH_APPKEY"; exit 1
+          fi
+          python3 <<PYEOF
+          p = "$MANIFEST"
+          with open(p, 'r', encoding='utf-8') as f: m = f.read()
+          block = '''
+              <meta-data android:name="JPUSH_APPKEY" android:value="$JPUSH_APPKEY" />
+              <meta-data android:name="JPUSH_CHANNEL" android:value="$JPUSH_CHANNEL" />
+          '''
+          if 'JPUSH_APPKEY' not in m:
+              m = m.replace('</application>', block + '\n    </application>', 1)
+              with open(p, 'w', encoding='utf-8') as f: f.write(m)
+          PYEOF
+
       - name: Sync Capacitor plugins to Android
         run: npx cap sync android
 
-      # ═══════════════════════════════════════
-      # 9. Gradle 编译 Debug APK
-      # ═══════════════════════════════════════
+      - name: 写入 versionName / versionCode
+        run: |
+          GRADLE=android/app/build.gradle
+          VERSION="${{ steps.version.outputs.version }}"
+          VCODE="${{ steps.version.outputs.vcode }}"
+          # sed 匹配 versionCode 1 / versionName "1.0"
+          sed -i "s/versionCode [0-9]\+/versionCode $VCODE/" "$GRADLE"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" "$GRADLE"
+          echo "═══ 版本信息 ═══"
+          grep -E "versionCode|versionName" "$GRADLE"
+
       - name: Build Debug APK
         run: |
           cd android
           chmod +x ./gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      # ═══════════════════════════════════════
-      # 10. 重命名 APK
-      # ═══════════════════════════════════════
       - name: Rename APK
         run: |
           APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ -f "$APK_PATH" ]; then
-            ls -lh "$APK_PATH"
-            mkdir -p artifacts
-            cp "$APK_PATH" "artifacts/yuliao-v1.0-debug.apk"
-            echo "═══ APK 大小 ═══"
-            ls -lh artifacts/
-          else
-            echo "❌ APK 未找到！查看构建输出："
-            find android/app/build/outputs -name "*.apk" 2>/dev/null
-            exit 1
-          fi
+          test -f "$APK_PATH" || { echo "❌ APK 未找到"; find android/app/build/outputs -name "*.apk"; exit 1; }
+          mkdir -p artifacts
+          cp "$APK_PATH" "artifacts/${{ steps.version.outputs.apk_name }}"
+          ls -lh artifacts/
 
-      # ═══════════════════════════════════════
-      # 11. 上传 Artifact
-      # ═══════════════════════════════════════
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yuliao-android-apk
-          path: artifacts/yuliao-v1.0-debug.apk
-          retention-days: 30
+          name: ${{ env.APP_NAME }}-android-apk-v${{ steps.version.outputs.version }}
+          path: artifacts/${{ steps.version.outputs.apk_name }}
+          retention-days: 90
 
-      # ═══════════════════════════════════════
-      # 12. 摘要
-      # ═══════════════════════════════════════
+      - name: 创建 GitHub Release (仅在 tag 触发时)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/${{ steps.version.outputs.apk_name }}
+          name: 宇聊 Android v${{ steps.version.outputs.version }}
+          body: |
+            ## 🎉 宇聊 Android v${{ steps.version.outputs.version }}
+
+            **构建号**：build ${{ steps.version.outputs.build }}
+            **versionCode**：${{ steps.version.outputs.vcode }}
+            **发布说明**：${{ github.event.inputs.release_notes || github.event.head_commit.message || '常规更新' }}
+
+            ### 📥 安装方式
+            服务端已配置代理下载，用户从 chat.qjyes.com/downloads/apk 或 APP 内更新弹窗自动获取本 APK。
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build summary
         run: |
-          echo "## 🎉 宇聊 Android APK 构建成功" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- 📱 应用：宇聊 (com.qjyes.yuliao)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔧 类型：Debug APK（未签名，可直接装）" >> $GITHUB_STEP_SUMMARY
-          echo "- 📦 大小：$(du -h artifacts/yuliao-v1.0-debug.apk | cut -f1)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔌 插件：21 个（相机/GPS/推送/通知/震动/录音等）" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📥 下载方式" >> $GITHUB_STEP_SUMMARY
-          echo "1. 页面顶部 Artifacts 区域点击 \`yuliao-android-apk\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. 下载 zip 解压得 APK" >> $GITHUB_STEP_SUMMARY
-          echo "3. 传到 Android 手机（微信/QQ/网盘/直接浏览器下）" >> $GITHUB_STEP_SUMMARY
-          echo "4. 允许「未知来源」→ 一键安装" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 🎉 宇聊 Android APK 构建成功"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| versionName | ${{ steps.version.outputs.version }} |"
+            echo "| versionCode | ${{ steps.version.outputs.vcode }} |"
+            echo "| APK 名称 | ${{ steps.version.outputs.apk_name }} |"
+            echo "| 大小 | $(du -h artifacts/${{ steps.version.outputs.apk_name }} | cut -f1) |"
+          } >> $GITHUB_STEP_SUMMARY
