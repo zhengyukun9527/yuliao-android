@@ -129,15 +129,74 @@ jobs:
           echo "═══ 版本信息 ═══"
           grep -E "versionCode|versionName" "$GRADLE"
 
-      - name: Build Debug APK
+      - name: Decode release keystore
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "❌ 缺 secrets.ANDROID_KEYSTORE_B64 - 存量用户无法覆盖安装！"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > android/app/yuliao-release.jks
+          ls -la android/app/yuliao-release.jks
+
+      - name: 注入 signing config 到 build.gradle
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          GRADLE=android/app/build.gradle
+          # 在 android { 块开头插入 signingConfigs（若尚未存在）
+          if ! grep -q "signingConfigs" "$GRADLE"; then
+            python3 <<PYEOF
+          import re
+          p = "$GRADLE"
+          with open(p, "r", encoding="utf-8") as f:
+              g = f.read()
+          block = """    signingConfigs {
+                  release {
+                      storeFile file('yuliao-release.jks')
+                      storePassword System.getenv('KS_PASS')
+                      keyAlias System.getenv('KEY_ALIAS')
+                      keyPassword System.getenv('KEY_PASS')
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                  }
+              }
+          """
+              # 在 android { 之后插入
+              g = re.sub(r'(android\s*\{)', r'\1\n' + block, g, count=1)
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(g)
+          PYEOF
+          fi
+          echo "═══ signing block ═══"
+          grep -A 6 "signingConfigs" "$GRADLE" | head -20
+
+      - name: Build Release APK (signed)
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: 验证签名指纹（确保是 yuliao release keystore）
+        run: |
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "APK: $APK"
+          $ANDROID_HOME/build-tools/34.0.0/apksigner verify --print-certs "$APK" | grep -E "SHA-1|Signer" | head -4
 
       - name: Rename APK
         run: |
-          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          APK_PATH="$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)"
           test -f "$APK_PATH" || { echo "❌ APK 未找到"; find android/app/build/outputs -name "*.apk"; exit 1; }
           mkdir -p artifacts
           cp "$APK_PATH" "artifacts/${{ steps.version.outputs.apk_name }}"
