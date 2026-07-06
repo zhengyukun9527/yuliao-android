@@ -34,6 +34,9 @@
     <!-- ═══ 其他 ═══ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
+    <!-- ═══ APP 内 APK 自动安装 (v1.0.9+) ═══ -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- ═══ 硬件特性(可选) ═══ -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
