@@ -147,14 +147,16 @@ jobs:
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           GRADLE=android/app/build.gradle
-          # 在 android { 块开头插入 signingConfigs（若尚未存在）
-          if ! grep -q "signingConfigs" "$GRADLE"; then
-            python3 <<PYEOF
-          import re
-          p = "$GRADLE"
+          cat > /tmp/inject_signing.py <<'PYSCRIPT'
+          import re, sys
+          p = "android/app/build.gradle"
           with open(p, "r", encoding="utf-8") as f:
               g = f.read()
-          block = """    signingConfigs {
+          if "signingConfigs" in g:
+              print("signingConfigs 已存在，跳过注入")
+              sys.exit(0)
+          block = """
+              signingConfigs {
                   release {
                       storeFile file('yuliao-release.jks')
                       storePassword System.getenv('KS_PASS')
@@ -162,21 +164,23 @@ jobs:
                       keyPassword System.getenv('KEY_PASS')
                   }
               }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                      minifyEnabled false
-                  }
-              }
           """
-              # 在 android { 之后插入
-              g = re.sub(r'(android\s*\{)', r'\1\n' + block, g, count=1)
-              with open(p, "w", encoding="utf-8") as f:
-                  f.write(g)
-          PYEOF
-          fi
+          # 在 android { 之后插入 signingConfigs
+          g = re.sub(r'(android\s*\{)', r'\1' + block, g, count=1)
+          # 给 release buildType 加 signingConfig（若已有 buildTypes.release 就补一行；否则在文件末尾加整块）
+          if re.search(r'buildTypes\s*\{[^}]*release\s*\{', g, re.S):
+              g = re.sub(r'(release\s*\{)', r'\1\n            signingConfig signingConfigs.release', g, count=1)
+          else:
+              g = re.sub(r'(android\s*\{)', r'\1\n    buildTypes {\n        release {\n            signingConfig signingConfigs.release\n            minifyEnabled false\n        }\n    }\n', g, count=1)
+          with open(p, "w", encoding="utf-8") as f:
+              f.write(g)
+          print("signing config 注入完成")
+          PYSCRIPT
+          python3 /tmp/inject_signing.py
           echo "═══ signing block ═══"
-          grep -A 6 "signingConfigs" "$GRADLE" | head -20
+          grep -A 8 "signingConfigs" "$GRADLE" | head -25
+          echo "═══ buildTypes ═══"
+          grep -A 5 "buildTypes" "$GRADLE" | head -15
 
       - name: Build Release APK (signed)
         env:
