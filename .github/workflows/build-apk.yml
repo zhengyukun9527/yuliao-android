@@ -141,56 +141,38 @@ jobs:
           ls -la android/app/yuliao-release.jks
 
       - name: 注入 signing config 到 build.gradle
-        env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           GRADLE=android/app/build.gradle
-          cat > /tmp/inject_signing.py <<'PYSCRIPT'
-          import re, sys
-          p = "android/app/build.gradle"
-          with open(p, "r", encoding="utf-8") as f:
-              g = f.read()
-          if "signingConfigs" in g:
-              print("signingConfigs 已存在，跳过注入")
-              sys.exit(0)
-          block = """
+          # 只在末尾追加，不动 Capacitor 原生 android {} 结构
+          if ! grep -q "signingConfigs.release" "$GRADLE"; then
+          cat >> "$GRADLE" <<'GRADLE_APPEND'
+
+          // ===== yuliao release signing (auto-injected by CI) =====
+          android {
               signingConfigs {
                   release {
                       storeFile file('yuliao-release.jks')
-                      storePassword System.getenv('KS_PASS')
-                      keyAlias System.getenv('KEY_ALIAS')
-                      keyPassword System.getenv('KEY_PASS')
+                      storePassword project.hasProperty('KS_PASS') ? KS_PASS : ""
+                      keyAlias project.hasProperty('KEY_ALIAS') ? KEY_ALIAS : ""
+                      keyPassword project.hasProperty('KEY_PASS') ? KEY_PASS : ""
                   }
               }
-          """
-          # 在 android { 之后插入 signingConfigs
-          g = re.sub(r'(android\s*\{)', r'\1' + block, g, count=1)
-          # 给 release buildType 加 signingConfig（若已有 buildTypes.release 就补一行；否则在文件末尾加整块）
-          if re.search(r'buildTypes\s*\{[^}]*release\s*\{', g, re.S):
-              g = re.sub(r'(release\s*\{)', r'\1\n            signingConfig signingConfigs.release', g, count=1)
-          else:
-              g = re.sub(r'(android\s*\{)', r'\1\n    buildTypes {\n        release {\n            signingConfig signingConfigs.release\n            minifyEnabled false\n        }\n    }\n', g, count=1)
-          with open(p, "w", encoding="utf-8") as f:
-              f.write(g)
-          print("signing config 注入完成")
-          PYSCRIPT
-          python3 /tmp/inject_signing.py
-          echo "═══ signing block ═══"
-          grep -A 8 "signingConfigs" "$GRADLE" | head -25
-          echo "═══ buildTypes ═══"
-          grep -A 5 "buildTypes" "$GRADLE" | head -15
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          GRADLE_APPEND
+          fi
+          echo "═══ tail of build.gradle ═══"
+          tail -20 "$GRADLE"
 
       - name: Build Release APK (signed)
-        env:
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease \
+            -PKS_PASS="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            -PKEY_ALIAS="${{ secrets.ANDROID_KEY_ALIAS }}" \
+            -PKEY_PASS="${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            --no-daemon --stacktrace
 
       - name: 验证签名指纹（确保是 yuliao release keystore）
         run: |
