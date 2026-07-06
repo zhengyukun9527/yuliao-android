@@ -118,6 +118,20 @@ jobs:
       - name: Sync Capacitor plugins to Android
         run: npx cap sync android
 
+      - name: 注入 ApkInstaller Plugin + MainActivity (v1.0.9+ 内置更新)
+        run: |
+          JAVA_DIR=android/app/src/main/java/com/qjyes/yuliao
+          mkdir -p "$JAVA_DIR"
+          if [ -f scripts/ApkInstallerPlugin.java ]; then
+            cp scripts/ApkInstallerPlugin.java "$JAVA_DIR/ApkInstallerPlugin.java"
+            echo "✅ ApkInstallerPlugin.java 已注入"
+          fi
+          if [ -f scripts/MainActivity.java ]; then
+            cp scripts/MainActivity.java "$JAVA_DIR/MainActivity.java"
+            echo "✅ MainActivity.java 已注入（含 registerPlugin）"
+          fi
+          ls -la "$JAVA_DIR"
+
       - name: 写入 versionName / versionCode
         run: |
           GRADLE=android/app/build.gradle
